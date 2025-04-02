@@ -1,0 +1,129 @@
+// File: core.kt
+package core
+
+import arrow.Kind
+
+interface WithMonad<F> {
+    val M: arrow.typeclasses.Monad<F>
+}
+
+fun <F> withMonad(M: arrow.typeclasses.Monad<F>, block: WithMonad<F>.() -> Unit) {
+    object : WithMonad<F> {
+        override val M = M
+    }.block()
+}
+
+// File: typeclasses.kt
+package typeclasses
+
+import arrow.Kind
+
+interface Functor<F> {
+    fun <A, B> Kind<F, A>.map(f: (A) -> B): Kind<F, B>
+}
+
+interface Applicative<F> : Functor<F> {
+    fun <A> just(a: A): Kind<F, A>
+    fun <A, B> Kind<F, A>.ap(ff: Kind<F, (A) -> B>): Kind<F, B>
+}
+
+interface Monad<F> : Applicative<F> {
+    fun <A, B> Kind<F, A>.flatMap(f: (A) -> Kind<F, B>): Kind<F, B>
+}
+
+// File: instances.kt
+package instances
+
+import arrow.fx.rx2.SingleK
+import arrow.fx.rx2.extensions.singlek.monad.monad
+
+val MonadSingleK = SingleK.monad()
+
+// File: dsl.kt
+package dsl
+
+import arrow.Kind
+import arrow.fx.rx2.SingleK
+import arrow.fx.rx2.extensions.*
+import core.WithMonad
+import io.reactivex.rxjava3.core.Single
+import instances.fix
+
+fun <A> Single<A>.toKind(): SingleK<A> = SingleK(this)
+
+fun <A, B> WithMonad<SingleK.Companion>.zipApWith(
+    self: (A) -> B,
+    value: Single<A>
+): Kind<SingleK.Companion, B> =
+    M.run { toKind().map(self) }
+
+fun <A, B> WithMonad<SingleK.Companion>.zipApWith(
+    self: Kind<SingleK.Companion, (A) -> B>,
+    value: Single<A>
+): Kind<SingleK.Companion, B> =
+    M.run { value.toKind().ap(self) }
+
+fun <A, B> WithMonad<SingleK.Companion>.flatApWith(
+    self: Kind<SingleK.Companion, (A) -> B>,
+    value: Single<A>
+): Kind<SingleK.Companion, B> =
+    M.run { self.flatMap { f -> value.toKind().map(f) } }
+
+fun <A, B> WithMonad<SingleK.Companion>.zipApWithNullable(
+    self: Kind<SingleK.Companion, (A?) -> B>,
+    value: Single<A>?
+): Kind<SingleK.Companion, B> =
+    if (value != null) M.run { value.toKind().ap(self) }
+    else M.run { self.map { it(null) } }
+
+fun <A, B> WithMonad<SingleK.Companion>.flatApWithNullable(
+    self: Kind<SingleK.Companion, (A?) -> B>,
+    value: Single<A>?
+): Kind<SingleK.Companion, B> =
+    M.run {
+        self.flatMap { f ->
+            if (value != null) value.toKind().map { a -> f(a) }
+            else M.just(f(null))
+        }
+    }
+
+fun <A> ((A) -> Unit).subscribeOn(value: Kind<SingleK.Companion, A>) {
+    value.fix().value.subscribe(this)
+}
+
+// File: example.kt
+package example
+
+import core.withMonad
+import dsl.*
+import instances.MonadSingleK
+import io.reactivex.rxjava3.core.Single
+import java.util.concurrent.TimeUnit
+import arrow.fx.rx2.SingleK
+import arrow.fx.rx2.extensions.fix
+
+data class User(val id: Int, val name: String, val email: String?, val phone: String, val address: String?)
+
+fun curriedUser(): (Int) -> (String) -> (String?) -> (String) -> (String?) -> User =
+    { id -> { name -> { email -> { phone -> { address -> User(id, name, email, phone, address) } } } } }
+
+fun fetchId(): Single<Int> = Single.just(1).delay(100, TimeUnit.MILLISECONDS)
+fun fetchName(): Single<String> = Single.just("Alice").delay(100, TimeUnit.MILLISECONDS)
+fun fetchEmail(): Single<String?>? = Single.just("alice@example.com").delay(100, TimeUnit.MILLISECONDS)
+fun fetchPhone(): Single<String> = Single.just("123456789").delay(100, TimeUnit.MILLISECONDS)
+fun fetchAddress(): Single<String?>? = null
+
+fun main() {
+    withMonad(MonadSingleK) {
+        val result =
+            M.just(::curriedUser)
+                .zipApWith(fetchId())
+                .zipApWith(fetchName())
+                .flatApWithNullable(fetchEmail())
+                .zipApWith(fetchPhone())
+                .flatApWithNullable(fetchAddress())
+
+        { println("Final User: $it") }.subscribeOn(result)
+    }
+}
+
