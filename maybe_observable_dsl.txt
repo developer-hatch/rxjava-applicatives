@@ -1,0 +1,68 @@
+// File: MaybeInstances.kt
+package instances
+
+import arrow.fx.rx2.MaybeK
+import arrow.fx.rx2.extensions.maybek.monad.monad
+
+val MonadMaybeK = MaybeK.monad()
+
+// File: ObservableInstances.kt
+package instances
+
+import arrow.fx.rx2.ObservableK
+import arrow.fx.rx2.extensions.observablek.monad.monad
+
+val MonadObservableK = ObservableK.monad()
+
+// File: MaybeObservableDsl.kt
+package dsl
+
+import arrow.Kind
+import arrow.fx.rx2.MaybeK
+import arrow.fx.rx2.ObservableK
+import arrow.fx.rx2.extensions.*
+import core.WithMonad
+import io.reactivex.rxjava3.core.Maybe
+import io.reactivex.rxjava3.core.Observable
+
+fun <A> Maybe<A>.toKind(): MaybeK<A> = MaybeK(this)
+fun <A> Observable<A>.toKind(): ObservableK<A> = ObservableK(this)
+
+// === Maybe ===
+fun <A, B> WithMonad<MaybeK.Companion>.zipApWithNullable(
+    self: Kind<MaybeK.Companion, (A?) -> B>,
+    value: Maybe<A>?
+): Kind<MaybeK.Companion, B> =
+    if (value != null) M.run { value.toKind().ap(self) }
+    else M.run { self.map { it(null) } }
+
+fun <A, B> WithMonad<MaybeK.Companion>.flatApWithNullable(
+    self: Kind<MaybeK.Companion, (A?) -> B>,
+    value: Maybe<A>?
+): Kind<MaybeK.Companion, B> =
+    M.run {
+        self.flatMap { f ->
+            if (value != null) value.toKind().map(f)
+            else M.just(f(null))
+        }
+    }
+
+// === Observable ===
+fun <A, B> WithMonad<ObservableK.Companion>.zipApWithNullable(
+    self: Kind<ObservableK.Companion, (A?) -> B>,
+    value: Observable<A>?
+): Kind<ObservableK.Companion, B> =
+    if (value != null) M.run { value.toKind().ap(self) }
+    else M.run { self.map { it(null) } }
+
+fun <A, B> WithMonad<ObservableK.Companion>.flatApWithNullable(
+    self: Kind<ObservableK.Companion, (A?) -> B>,
+    value: Observable<A>?
+): Kind<ObservableK.Companion, B> =
+    M.run {
+        self.flatMap { f ->
+            if (value != null) value.toKind().map(f)
+            else M.just(f(null))
+        }
+    }
+
